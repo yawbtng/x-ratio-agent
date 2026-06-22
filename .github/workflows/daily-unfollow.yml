@@ -1,4 +1,5 @@
 name: daily-unfollow
+# Daily trigger for the deployed Browserbase x-unfollow function.
 
 # The browser work runs on Browserbase (the deployed `x-unfollow` Function). This workflow is just
 # the daily trigger — it pokes the function's invoke URL. No Node, no checkout, no session here.
