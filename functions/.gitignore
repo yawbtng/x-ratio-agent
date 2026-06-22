@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+*.log
+.bb/
+.browserbase/
+manifests/
+# Use npm here, not pnpm: the cloud build needs package-lock.json (committed). A pnpm-lock.yaml
+# would make the Heroku buildpack's `npm ci` fail, so keep it out of the repo + archive.
+pnpm-lock.yaml
+# NOTE: do NOT add a negation pattern like `!.env.example` here. The `bb publish` archiver merges
+# this file into its ignore list, and readdir-glob treats a single `!` pattern as poison — it
+# silently matches ZERO files and you deploy an empty function. `.env` (no glob) already keeps
+# .env.example tracked in git, so no negation is needed.

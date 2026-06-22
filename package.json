@@ -1,0 +1,31 @@
+{
+  "name": "x-ratio-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser-automation agent (Browserbase + Stagehand) that audits your X following and recommends who to unfollow. See ../../tasks/x-ratio-agent-plan.md",
+  "scripts": {
+    "auth": "tsx src/cli.ts login",
+    "spike0": "tsx src/cli.ts spike0",
+    "scan": "tsx src/cli.ts scan",
+    "score": "tsx src/cli.ts score",
+    "report": "tsx src/cli.ts report",
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "harvest": "tsx src/cli.ts harvest",
+    "unfollow": "tsx src/cli.ts unfollow"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@browserbasehq/sdk": "^2.10.0",
+    "@browserbasehq/stagehand": "^3.5.0",
+    "dotenv": "^16.4.5",
+    "zod": "^4.0.16"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "@types/node": "^22.9.0",
+    "playwright-core": "^1.55.1"
+  }
+}

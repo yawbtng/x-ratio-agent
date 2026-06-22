@@ -1,0 +1,36 @@
+name: daily-unfollow
+
+# The browser work runs on Browserbase (the deployed `x-unfollow` Function). This workflow is just
+# the daily trigger — it pokes the function's invoke URL. No Node, no checkout, no session here.
+#
+# Requires repo secrets:
+#   BROWSERBASE_API_KEY  — your Browserbase key
+#   BB_FUNCTION_ID       — the id printed by `bb publish` (see functions/DEPLOY.md)
+on:
+  schedule:
+    - cron: "0 17 * * *" # 17:00 UTC ≈ 10am PT
+  workflow_dispatch:
+    inputs:
+      max:
+        description: "How many to unfollow this run"
+        default: "20"
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke Browserbase unfollow function
+        run: |
+          MAX="${{ github.event.inputs.max || '20' }}"
+          echo "Invoking x-unfollow (max=$MAX)…"
+          HTTP=$(curl -sS -w '\n%{http_code}' -X POST \
+            "https://api.browserbase.com/v1/functions/${{ secrets.BB_FUNCTION_ID }}/invoke" \
+            -H "x-bb-api-key: ${{ secrets.BROWSERBASE_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"params\":{\"max\":$MAX}}")
+          BODY=$(echo "$HTTP" | sed '$d')
+          CODE=$(echo "$HTTP" | tail -1)
+          echo "HTTP $CODE"
+          echo "$BODY"
+          # 2xx = accepted. Anything else (e.g. 402 plan limit) fails the run so you get notified.
+          [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]

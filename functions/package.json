@@ -1,0 +1,18 @@
+{
+  "name": "x-unfollow-fn",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browserbase Function: gentle stateless X unfollow grind (deployed via `bb publish`).",
+  "scripts": {
+    "dev": "bb dev",
+    "deploy": "bb publish main.ts",
+    "deploy:dry": "bb publish main.ts --dry-run",
+    "invoke": "bb invoke --params '{\"params\":{\"dryRun\":true}}'"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk-functions": "^1.0.1",
+    "playwright-core": "^1.49.0",
+    "zod": "^4.0.0"
+  }
+}

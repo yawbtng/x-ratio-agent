@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+# NOTE: data/ IS committed (private repo only) so the GitHub Actions cron can resume
+# grind state between runs. It holds your follow graph + the LLM keep/drop judgments +
+# the Browserbase contextId (not credentials — the X login lives server-side in Browserbase).
