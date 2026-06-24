@@ -2,21 +2,24 @@
 //
 // WHY a Function: the browser runs on Browserbase's own infra (not your laptop, not a GitHub
 // runner). A daily GitHub Actions curl just pokes this function's URL — all the heavy work
-// (the logged-in session, the scrolling, the clicks) happens here, on Browserbase.
+// (the logged-in session, the navigation, the clicks) happens here, on Browserbase.
 //
-// WHY stateless: X itself is the source of truth for "who's left to unfollow." We walk the
-// /following list and only unfollow handles that are (a) on the baked-in DROP list and (b) STILL
-// followed. Anyone already unfollowed has left the list, so they never reappear. No run-state,
-// no database, no committing progress back — which is exactly what the "no persistent storage
-// between invocations" Functions limit requires.
+// WHY stateless: X itself is the source of truth for "who's left to unfollow." We only unfollow
+// handles that are (a) on the baked-in DROP list and (b) STILL followed right now. Anyone already
+// unfollowed reads as "not following" and is skipped. No run-state, no database — which is exactly
+// what the "no persistent storage between invocations" Functions limit requires.
 //
-// WHY inline (not per-profile): walking the list once + clicking in place costs ~1 page load.
-// Visiting N profiles costs N page loads — N× the browser-minutes + proxy bandwidth. Minutes are
-// metered (they're literally what ran out before), so inline is the cost-correct default.
+// TWO MODES (param `mode`):
+//   "profile" (DEFAULT) — visit each drop account's profile page directly and unfollow there.
+//       Robust: it does NOT depend on the /following list rendering. X was observed throttling the
+//       /following LIST for automated sessions (3 rows then empty) while profiles still load fine,
+//       so this is the path that actually makes progress. We shuffle the drop list each run so we
+//       hit still-followed targets fast instead of re-walking the already-done prefix.
+//   "list" — the original inline path: scroll /following once, click Unfollow in place. Cheaper in
+//       browser-minutes, but useless when X starves the list view. Kept as a fallback.
 //
-// WHY deterministic (no Stagehand/LLM): every action here is a plain DOM query/click keyed off
-// the stable aria-label="Following" signal + X's confirmationSheetConfirm testid. No model call,
-// no Anthropic key, smaller bundle, fully repeatable.
+// WHY deterministic (no Stagehand/LLM): every action is a plain DOM query/click keyed off the
+// stable aria-label="Following" signal + X's confirmationSheetConfirm testid. No model call.
 
 import { chromium } from "playwright-core";
 import { z } from "zod";
@@ -33,11 +36,46 @@ const CONTEXT_ID = process.env.X_CONTEXT_ID ?? "8c6f0abe-73d1-4541-b796-eff6c30a
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const jitter = (min: number, max: number) => Math.round(min + Math.random() * (max - min));
+function shuffled<T>(arr: readonly T[]): T[] {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
+}
 
+// ── Profile-page primitives (mode: "profile") ──────────────────────────────────────────────────
+// Follow state from a PROFILE's primary button via its (stable) aria-label.
+//   'following' = we follow them · 'notfollowing' = we don't · 'unknown' = button not rendered yet.
+const PROFILE_STATE_EXPR = `(() => {
+  var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
+  var btns = scope.querySelectorAll('[role="button"][aria-label], button[aria-label]');
+  var sawFollow = false;
+  for (var i = 0; i < btns.length; i++) {
+    var al = btns[i].getAttribute('aria-label') || '';
+    if (/^Following/i.test(al)) return 'following';
+    if (/^Follow\\b/i.test(al)) sawFollow = true;
+  }
+  return sawFollow ? 'notfollowing' : 'unknown';
+})()`;
+
+// Click the profile's "Following" button (opens the unfollow confirm). Returns true if clicked.
+const PROFILE_CLICK_EXPR = `(() => {
+  var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
+  var btns = scope.querySelectorAll('[role="button"][aria-label], button[aria-label]');
+  for (var i = 0; i < btns.length; i++) {
+    if (/^Following/i.test(btns[i].getAttribute('aria-label') || '')) { btns[i].click(); return true; }
+  }
+  return false;
+})()`;
+
+const CONFIRM_EXPR = `(() => { var b = document.querySelector('[data-testid="confirmationSheetConfirm"]'); if (b) { b.click(); return true; } return false; })()`;
+
+// ── List-page primitives (mode: "list", fallback) ──────────────────────────────────────────────
 // Extract a UserCell's @handle from its profile LINK href (e.g. <a href="/jack">), NOT from
-// textContent. textContent glues the handle directly to the "Following" button label with no
-// separator, so a text regex swallows "…Follow"/"…Following" into the handle and nothing matches.
-// The href is the single source of truth: `/handle` with no extra path segment.
+// textContent — textContent glues the handle to the "Following" button label with no separator,
+// so a text regex swallows "…Following" into the handle and nothing matches. href is unambiguous.
 const CELL_HANDLE_JS = `function cellHandle(cell){
   var links = cell.querySelectorAll('a[href]');
   for (var i = 0; i < links.length; i++) {
@@ -48,18 +86,15 @@ const CELL_HANDLE_JS = `function cellHandle(cell){
   return null;
 }`;
 
-// Find the first visible UserCell whose @handle is a DROP target we haven't already clicked this
-// run, click its row-scoped "Following" button, return the handle. Null if none currently visible.
 const FIND_CLICK_EXPR = `(() => {
   ${CELL_HANDLE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
   var cells = scope.querySelectorAll('[data-testid="UserCell"]');
   for (var i = 0; i < cells.length; i++) {
-    var cell = cells[i];
-    var h = cellHandle(cell);
+    var h = cellHandle(cells[i]);
     if (!h) continue;
     if (!window.__drop.has(h) || window.__done.has(h)) continue;
-    var btns = cell.querySelectorAll('[role="button"][aria-label], button[aria-label]');
+    var btns = cells[i].querySelectorAll('[role="button"][aria-label], button[aria-label]');
     for (var j = 0; j < btns.length; j++) {
       if (/^Following/i.test(btns[j].getAttribute('aria-label') || '')) {
         btns[j].scrollIntoView({ block: 'center' });
@@ -71,10 +106,6 @@ const FIND_CLICK_EXPR = `(() => {
   return null;
 })()`;
 
-const CONFIRM_EXPR = `(() => { var b = document.querySelector('[data-testid="confirmationSheetConfirm"]'); if (b) { b.click(); return true; } return false; })()`;
-
-// After clicking, confirm the row flipped to "Follow" (success) vs still "Following" (X reverted).
-// "gone" = scrolled out of the DOM — treat as success (it was acted on).
 const verifyExpr = (handle: string) => `(() => {
   ${CELL_HANDLE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
@@ -97,7 +128,7 @@ type Result = {
   unfollowed: number;
   handles: string[];
   error: string;
-  cellsRendered: number;
+  visited: number;
   dryRun: boolean;
 };
 const result = (r: Partial<Result>): Result => ({
@@ -105,16 +136,33 @@ const result = (r: Partial<Result>): Result => ({
   unfollowed: 0,
   handles: [],
   error: "",
-  cellsRendered: 0,
+  visited: 0,
   dryRun: false,
   ...r,
 });
+
+// Poll a profile's follow-state until it resolves (proxy/profile render can be slow).
+async function profileState(
+  page: import("playwright-core").Page,
+  timeoutMs = 9000,
+): Promise<"following" | "notfollowing" | "unknown"> {
+  const deadline = Date.now() + timeoutMs;
+  let s = "unknown";
+  while (Date.now() < deadline) {
+    s = (await page.evaluate(PROFILE_STATE_EXPR)) as string;
+    if (s !== "unknown") break;
+    await sleep(700);
+  }
+  return s as "following" | "notfollowing" | "unknown";
+}
 
 const paramsSchema = z.object({
   // How many to unfollow this run. Keep it gentle — X rate-limits at the ACCOUNT level, so a
   // small daily batch is what avoids the throttle-to-zero spiral. Hard-capped at 40.
   max: z.number().int().positive().max(40).optional(),
-  // dryRun: just confirm we're logged in + the list renders, unfollow nothing.
+  // "profile" (default, robust) or "list" (cheaper, but dies when X starves the list view).
+  mode: z.enum(["profile", "list"]).optional(),
+  // dryRun: confirm login + that targets are actionable, unfollow nothing.
   dryRun: z.boolean().optional(),
 });
 
@@ -122,10 +170,11 @@ defineFn(
   "x-unfollow",
   async (ctx, params) => {
     const max = params?.max ?? 20;
+    const mode = params?.mode ?? "profile";
     const dryRun = params?.dryRun ?? false;
 
-    // ctx.session was created by the runtime using our sessionConfig below — i.e. it already
-    // loaded our Context, so this browser is logged into X. We just attach over CDP.
+    // ctx.session was created by the runtime using our sessionConfig below — it already loaded our
+    // Context, so this browser is logged into X. We just attach over CDP.
     const browser = await chromium.connectOverCDP(ctx.session.connectUrl);
     try {
       const context = browser.contexts()[0]!;
@@ -138,13 +187,66 @@ defineFn(
         return result({ error: "not_logged_in" });
       }
 
+      // ── PROFILE MODE (default) ──────────────────────────────────────────────────────────────
+      if (mode === "profile") {
+        const queue = shuffled(DROP);
+        const handles: string[] = [];
+        let count = 0;
+        let visited = 0;
+
+        if (dryRun) {
+          // Visit a few shuffled drop profiles and report their follow-state — proves profiles load
+          // and that targets are still followable (i.e. profile-nav can make progress).
+          const states: string[] = [];
+          for (const h of queue.slice(0, 6)) {
+            await page.goto(`${X_BASE}/${h}`, { waitUntil: "domcontentloaded" });
+            states.push(`${h}=${await profileState(page)}`);
+            await sleep(jitter(1500, 3000));
+          }
+          return result({ ok: true, dryRun: true, visited: 6, handles: states });
+        }
+
+        // Cap total profile visits so a run of mostly-already-done accounts can't blow the 15-min
+        // execution ceiling. With most of DROP still un-done, `count` hits `max` well before this.
+        const visitCap = Math.min(queue.length, max * 3 + 15);
+        for (const handle of queue) {
+          if (count >= max || visited >= visitCap) break;
+          visited++;
+          try {
+            await page.goto(`${X_BASE}/${handle}`, { waitUntil: "domcontentloaded" });
+          } catch {
+            continue; // profile failed to load — skip
+          }
+          if (/\/i\/flow\/login|\/login/.test(new URL(page.url()).pathname)) {
+            // bounced to a login/challenge wall — stop and report what we got
+            return result({ error: "login_wall", unfollowed: count, handles, visited });
+          }
+          const before = await profileState(page);
+          if (before !== "following") {
+            // already unfollowed / suspended / private / didn't load — skip quickly
+            await sleep(jitter(1200, 3000));
+            continue;
+          }
+          await page.evaluate(PROFILE_CLICK_EXPR);
+          await sleep(900);
+          await page.evaluate(CONFIRM_EXPR);
+          await sleep(1300);
+          if ((await profileState(page, 6000)) === "notfollowing") {
+            count++;
+            handles.push(handle);
+          }
+          await sleep(jitter(4000, 9000)); // human-like pacing
+          if (count > 0 && count % 12 === 0) await sleep(30000); // periodic breather
+        }
+        return result({ ok: true, unfollowed: count, handles, visited });
+      }
+
+      // ── LIST MODE (fallback) ────────────────────────────────────────────────────────────────
       await page.goto(`${X_BASE}/${X_HANDLE}/following`, { waitUntil: "domcontentloaded" });
       await sleep(3500);
       if (/\/i\/flow\/login|\/login/.test(new URL(page.url()).pathname)) {
         return result({ error: "login_wall" });
       }
-
-      // Wait for the virtualized list to actually paint rows (can be slow / rate-limited).
       let cells = 0;
       for (let i = 0; i < 14; i++) {
         cells = (await page.evaluate(`document.querySelectorAll('[data-testid="UserCell"]').length`)) as number;
@@ -154,65 +256,13 @@ defineFn(
       }
       if (cells === 0) return result({ error: "list_blank_throttled" });
 
-      // Seed the target set (DROP) + an in-run "already clicked" set onto the page.
       await page.evaluate(
         `window.__drop = new Set(${JSON.stringify(DROP)}); window.__done = new Set(); 'ok'`,
       );
 
-      if (dryRun) {
-        // DIAGNOSTIC: walk the list (no clicks) and report what the finder would actually see —
-        // how many distinct drop-targets become visible, and whether scrolling advances the list.
-        const SCAN_EXPR = `(() => {
-          ${CELL_HANDLE_JS}
-          var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
-          var cells = scope.querySelectorAll('[data-testid="UserCell"]');
-          var withHandle = 0, dropTargets = 0, dropWithBtn = 0; var samples = [];
-          for (var i = 0; i < cells.length; i++) {
-            var h = cellHandle(cells[i]);
-            if (!h) continue; withHandle++;
-            if (samples.length < 10) samples.push(h);
-            if (!window.__drop.has(h)) continue; dropTargets++;
-            var btns = cells[i].querySelectorAll('[role="button"][aria-label], button[aria-label]');
-            var hasBtn = false;
-            for (var j = 0; j < btns.length; j++) { if (/^Following/i.test(btns[j].getAttribute('aria-label')||'')) hasBtn = true; }
-            if (hasBtn) dropWithBtn++;
-          }
-          return { cells: cells.length, withHandle: withHandle, dropTargets: dropTargets, dropWithBtn: dropWithBtn, samples: samples };
-        })()`;
-        const seen = new Set<string>();
-        let lastTop = "";
-        let scrollAdvanced = 0;
-        let scan: any = await page.evaluate(SCAN_EXPR);
-        for (let i = 0; i < 12; i++) {
-          const cur: any = await page.evaluate(SCAN_EXPR);
-          if (cur.samples[0] && cur.samples[0] !== lastTop) scrollAdvanced++;
-          lastTop = cur.samples[0] ?? lastTop;
-          for (const s of cur.samples) seen.add(s);
-          scan = cur;
-          await page.evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.85))");
-          await sleep(900);
-        }
-        return result({
-          ok: true,
-          dryRun: true,
-          cellsRendered: cells,
-          // pack diagnostics into handles[] so we can read them off the JSON return
-          handles: [
-            `lastScan_cells=${scan.cells}`,
-            `lastScan_withHandle=${scan.withHandle}`,
-            `lastScan_dropTargets=${scan.dropTargets}`,
-            `lastScan_dropWithBtn=${scan.dropWithBtn}`,
-            `scrollAdvancedRounds=${scrollAdvanced}/12`,
-            `distinctTargetsSeen=${seen.size}`,
-            `samples=${scan.samples.join(",")}`,
-          ],
-        });
-      }
-
       const handles: string[] = [];
       let count = 0;
       let stalls = 0;
-      // Stop when we hit `max`, or the list stops yielding fresh targets after many scrolls.
       while (count < max && stalls < 25) {
         const h = (await page.evaluate(FIND_CLICK_EXPR)) as string | null;
         if (h) {
@@ -226,15 +276,14 @@ defineFn(
             handles.push(h);
           }
           stalls = 0;
-          await sleep(jitter(5000, 11000)); // human-like pacing
-          if (count > 0 && count % 12 === 0) await sleep(30000); // periodic breather
+          await sleep(jitter(5000, 11000));
+          if (count > 0 && count % 12 === 0) await sleep(30000);
         } else {
           await page.evaluate("window.scrollBy(0, Math.round(window.innerHeight * 0.85))");
           await sleep(700);
           stalls++;
         }
       }
-
       return result({ ok: true, unfollowed: count, handles });
     } finally {
       await browser.close();
@@ -242,8 +291,8 @@ defineFn(
   },
   {
     // The runtime creates ctx.session FROM this config. Loading our Context here is what makes the
-    // session arrive already logged into X. proxies:true matches the local setup (residential IP
-    // is baseline for X). timeout is just under the 15-min Function execution ceiling.
+    // session arrive already logged into X. proxies:true matches the local setup. timeout is just
+    // under the 15-min Function execution ceiling.
     sessionConfig: {
       browserSettings: {
         context: { id: CONTEXT_ID, persist: false },
