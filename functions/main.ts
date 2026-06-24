@@ -209,12 +209,17 @@ defineFn(
         // Cap total profile visits so a run of mostly-already-done accounts can't blow the 15-min
         // execution ceiling. With most of DROP still un-done, `count` hits `max` well before this.
         const visitCap = Math.min(queue.length, max * 3 + 15);
+        // Circuit breaker: if many shuffled profiles in a row are non-actionable, the account is
+        // throttled (profiles not loading → "unknown") or we hit a done-cluster — bail rather than
+        // burn minutes. With ~93% of DROP still followed, 15-in-a-row is near-impossible normally.
+        let consecutiveSkips = 0;
         for (const handle of queue) {
-          if (count >= max || visited >= visitCap) break;
+          if (count >= max || visited >= visitCap || consecutiveSkips >= 15) break;
           visited++;
           try {
             await page.goto(`${X_BASE}/${handle}`, { waitUntil: "domcontentloaded" });
           } catch {
+            consecutiveSkips++;
             continue; // profile failed to load — skip
           }
           if (/\/i\/flow\/login|\/login/.test(new URL(page.url()).pathname)) {
@@ -224,9 +229,11 @@ defineFn(
           const before = await profileState(page);
           if (before !== "following") {
             // already unfollowed / suspended / private / didn't load — skip quickly
+            consecutiveSkips++;
             await sleep(jitter(1200, 3000));
             continue;
           }
+          consecutiveSkips = 0; // found a live target — reset the breaker
           await page.evaluate(PROFILE_CLICK_EXPR);
           await sleep(900);
           await page.evaluate(CONFIRM_EXPR);

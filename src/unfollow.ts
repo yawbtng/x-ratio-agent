@@ -148,16 +148,30 @@ async function unfollowOne(stagehand: Stagehand, page: Page, handle: string): Pr
 // Faster + far better demo footage than per-profile navigation. Targets/done live on `window`
 // so the in-page finder can skip them; all clicks are deterministic (no per-item LLM call).
 
+// Extract a UserCell's @handle from its profile LINK href (e.g. <a href="/jack">), NOT from
+// textContent. textContent glues the handle directly to the "Following" button label with no
+// separator, so a text regex swallows "…Following" into the handle (e.g. "wing_vcfollowin") and
+// nothing matches the drop set. The href is unambiguous: `/handle` with no extra path segment.
+const CELL_HANDLE_JS = `function cellHandle(cell){
+  var links = cell.querySelectorAll('a[href]');
+  for (var i = 0; i < links.length; i++) {
+    var href = links[i].getAttribute('href') || '';
+    var mm = href.match(/^\\/([A-Za-z0-9_]{1,15})$/);
+    if (mm) return mm[1].toLowerCase();
+  }
+  return null;
+}`;
+
 // Find the first visible UserCell whose @handle is a target we haven't done, click its
 // "Following" button (scoped to that row), and return the handle. Null if none visible.
 const FIND_CLICK_EXPR = `(() => {
+  ${CELL_HANDLE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
   var cells = scope.querySelectorAll('[data-testid="UserCell"]');
   for (var i = 0; i < cells.length; i++) {
     var cell = cells[i];
-    var m = (cell.textContent || '').match(/@([A-Za-z0-9_]{1,15})/);
-    if (!m) continue;
-    var h = m[1].toLowerCase();
+    var h = cellHandle(cell);
+    if (!h) continue;
     if (!window.__drop.has(h) || window.__done.has(h)) continue;
     var btns = cell.querySelectorAll('[role="button"][aria-label], button[aria-label]');
     for (var j = 0; j < btns.length; j++) {
@@ -176,11 +190,11 @@ const CONFIRM_EXPR = `(() => { var b = document.querySelector('[data-testid="con
 // Verify a handle's row flipped to "Follow" (success) vs still "Following" (failed/reverted).
 function verifyExpr(handle: string): string {
   return `(() => {
+    ${CELL_HANDLE_JS}
     var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
     var cells = scope.querySelectorAll('[data-testid="UserCell"]');
     for (var i = 0; i < cells.length; i++) {
-      var m = (cells[i].textContent || '').match(/@([A-Za-z0-9_]{1,15})/);
-      if (!m || m[1].toLowerCase() !== ${JSON.stringify(handle)}) continue;
+      if (cellHandle(cells[i]) !== ${JSON.stringify(handle)}) continue;
       var btns = cells[i].querySelectorAll('[role="button"][aria-label], button[aria-label]');
       for (var j = 0; j < btns.length; j++) {
         if (/^Following/i.test(btns[j].getAttribute('aria-label') || '')) return 'following';

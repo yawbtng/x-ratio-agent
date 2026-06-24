@@ -1,20 +1,25 @@
 # Deploying the `x-unfollow` Browserbase Function
 
-Built and ready. **Not yet deployed** — deploy is blocked until the Browserbase plan has browser
-minutes (the account hit `402 Free plan browser minutes limit reached` on 2026-06-21). Once that's
-resolved, this is ~10 minutes of work.
+**DEPLOYED + LIVE.** Function ID `8af7020e-94a7-480e-8df4-aed789742e89`, daily cron wired. This doc
+is the runbook for re-deploying after code/droplist changes, and the record of how it works.
 
 ## What this is
 
-A stateless Browserbase Function that walks your `/following` list and unfollows up to N accounts
-that are on the baked-in `droplist.ts` (the DROP recommendations from the scan/score pipeline).
-The browser runs on Browserbase; a daily GitHub Actions curl is the only external trigger.
+A stateless Browserbase Function that unfollows up to N accounts on the baked-in `droplist.ts`
+(the DROP recommendations from the scan/score pipeline). The browser runs on Browserbase; a daily
+GitHub Actions curl is the only external trigger.
 
-- **No state to manage.** Already-unfollowed accounts have left the list, so they never reappear.
+- **Two modes (param `mode`).** `"profile"` (DEFAULT) visits each drop account's profile page
+  directly and unfollows there — robust, because X throttles the `/following` LIST for automated
+  sessions (renders ~3 rows then empty) while profiles still load fine. `"list"` is the original
+  inline path (scroll /following, click in place) — cheaper but useless under the list-throttle.
+  Kept as a fallback. **Profile mode is what actually makes progress.**
+- **No state to manage.** Profile mode shuffles the drop list each run and only unfollows accounts
+  that read as still-"Following"; already-done ones are skipped. No run-state, idempotent.
 - **Gentle by default** (`max: 20`). X rate-limits per account — small daily batches avoid the
   throttle-to-zero spiral that a 150/day grind triggered before.
-- **Deterministic.** Pure DOM clicks off `aria-label="Following"` + `confirmationSheetConfirm`.
-  No LLM, no Anthropic key.
+- **Deterministic.** Pure DOM clicks off `aria-label="Following"` + `confirmationSheetConfirm`,
+  with verify-after (X silently reverts uncommitted unfollows). No LLM, no Anthropic key.
 
 ## Prerequisites
 
@@ -34,17 +39,19 @@ cp .env.example .env          # fill BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID
 npm install                   # generates package-lock.json (required by the cloud build) + node_modules
 
 # 1. Smoke-test locally first (creates ONE real session — uses a little browser time).
-#    Dry run: confirms login + that the list renders (also prints a drop-target diagnostic).
+#    Profile-mode dry run: visits 6 shuffled drop profiles, reports their follow-state.
 npx bb dev main.ts            # starts local runtime on 127.0.0.1:14113 (entrypoint arg is REQUIRED)
 #    in another shell:
 curl -X POST http://127.0.0.1:14113/v1/functions/x-unfollow/invoke \
   -H "Content-Type: application/json" -d '{"params":{"dryRun":true}}'
-#    expect: ok:true, and handles[] showing lastScan_dropTargets > 0 (real targets visible)
+#    expect: ok:true, handles[] like ["wing_vc=following","mem0ai=following",...]
+#    (several "=following" means targets are still actionable → profile mode will make progress)
 
-# 2. Real local run, tiny batch, to confirm the click path works:
+# 2. Real local run, tiny batch, to confirm the unfollow path works:
 curl -X POST http://127.0.0.1:14113/v1/functions/x-unfollow/invoke \
   -H "Content-Type: application/json" -d '{"params":{"max":5}}'
-#    expect: {"ok":true,"unfollowed":5,"handles":[...]}
+#    expect: {"ok":true,"unfollowed":5,"visited":~6,"handles":[...]}
+#    (to test the fallback list mode instead: add "mode":"list" to params)
 
 # 3. Publish to Browserbase (entrypoint arg REQUIRED):
 npx bb publish main.ts        # uploads, builds (~1 min), prints the Function ID. Save it.
@@ -77,23 +84,22 @@ gh secret set BB_FUNCTION_ID      --body "FUNCTION_ID_FROM_PUBLISH"
 Then it fires daily at 17:00 UTC, or run it on demand from the Actions tab (`workflow_dispatch`,
 with an optional `max`). A non-2xx response (e.g. a future 402) fails the run so you get notified.
 
-## Assumptions to verify on first deploy (couldn't test under the 402)
+## Verified behavior + operational notes
 
-These are the spots where the code follows the documented/typed API but hasn't run against the live
-runtime. Check them on the first `bb dev` / `bb publish`:
+All confirmed against the live runtime (2026-06-22 → 06-24):
 
-1. **`sessionConfig.browserSettings.context` is honored.** The whole design assumes the runtime
-   creates `ctx.session` *with our Context*, so the browser arrives logged into X. The type is
-   `Omit<SessionCreateParams, "projectId">`, which includes `browserSettings.context` — but if the
-   dry run returns `{"ok":false,"error":"not_logged_in"}`, the runtime ignored it. Fallback: create
-   our own Stagehand/SDK session inside the handler with the Context (the parent project's
-   `src/browser/session.ts` is the exact pattern) instead of using `ctx.session`.
-2. **The runtime installs deps from `package.json`** (node_modules is excluded from the archive).
-   If `playwright-core` is missing at runtime, pin it / check the publish logs.
-3. **15-min execution cap.** `max: 20` at ~8s pacing ≈ 4 min, well under. Don't raise `max` past
-   ~30 or a long throttle pause could blow the cap.
-4. **Proxy bandwidth.** `proxies: true` matches local; residential proxy is metered separately from
-   browser minutes — watch both in the Browserbase dashboard.
+1. **`sessionConfig.browserSettings.context` IS honored** — the auto-created `ctx.session` arrives
+   logged into X via the persisted Context. (If a dry run ever returns `error:"not_logged_in"`, the
+   Context expired: re-run `pnpm auth` in the parent project to refresh it.)
+2. **The runtime installs deps from `package.json`** (node_modules excluded from the archive). The
+   cloud build is the Heroku Node buildpack → `npm ci`, which is why a committed `package-lock.json`
+   is mandatory (see the npm note above).
+3. **15-min execution cap** — profile mode at `max: 20` runs ~5 min (a visit-cap of `max*3+15`
+   bounds it). Don't raise `max` past ~30.
+4. **Proxy bandwidth** — `proxies: true`; residential proxy is metered separately from browser
+   minutes. Watch both in the Browserbase dashboard.
+5. **Cadence** — X throttles the account under rapid back-to-back sessions. One run/day (the cron)
+   is the right pace; don't fire many invocations manually in a short window.
 
 ## Refreshing the target list
 
@@ -102,5 +108,5 @@ baked-in list and re-publish:
 
 ```bash
 node ../scripts/gen-droplist.mjs   # rewrites droplist.ts from data/scored.json
-pnpm bb publish main.ts
+npx bb publish main.ts
 ```

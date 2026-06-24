@@ -10,9 +10,11 @@ back and aren't relevant, while keeping the ones you care about. Built on
    followers + following graph by capturing X's own GraphQL responses in-browser.
 2. **Score** — rank every non-mutual you follow by relevance (LLM, vs an interest profile) +
    notability, then mark the lowest as `DROP` until the keep-budget hits your target.
-3. **Unfollow** — a stateless [Browserbase Function](functions/) walks your `/following` list and
-   unfollows up to N accounts on the DROP list per run. Already-unfollowed accounts have left the
-   list, so it's naturally idempotent — no run-state to manage.
+3. **Unfollow** — a stateless [Browserbase Function](functions/) visits each DROP account's profile
+   page directly and unfollows up to N per run (default `profile` mode; a `list` mode that scrolls
+   /following is kept as a fallback). Profile-nav is the robust path because X throttles the
+   /following *list* for automated sessions while profile pages still load. It only unfollows
+   accounts that still read as "Following", so it's idempotent — no run-state to manage.
 4. **Automate** — a daily [GitHub Actions workflow](.github/workflows/daily-unfollow.yml) pokes the
    function's URL. The browser work all runs on Browserbase; GitHub is just the alarm clock.
 
