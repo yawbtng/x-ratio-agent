@@ -9,15 +9,16 @@ name: daily-unfollow
 #   BB_FUNCTION_ID       — the id printed by `bb publish` (see functions/DEPLOY.md)
 on:
   schedule:
-    # Twice a day, ~12h apart → ~60 unfollows/day at max=30 each. Spacing keeps it gentle on X's
-    # account-level throttle (burst size is what trips it, not the daily total spread thin).
+    # Three times a day, every 8h → ~60 unfollows/day at max=20 each. Smaller, more frequent batches
+    # are gentler on X's account-level throttle than fewer big ones (burst size is what trips it).
+    - cron: "0 1 * * *"  # 01:00 UTC ≈ 6pm PT
+    - cron: "0 9 * * *"  # 09:00 UTC ≈ 2am PT
     - cron: "0 17 * * *" # 17:00 UTC ≈ 10am PT
-    - cron: "0 5 * * *"  # 05:00 UTC ≈ 10pm PT
   workflow_dispatch:
     inputs:
       max:
         description: "How many to unfollow this run"
-        default: "30"
+        default: "20"
 
 jobs:
   trigger:
@@ -25,7 +26,7 @@ jobs:
     steps:
       - name: Invoke Browserbase unfollow function
         run: |
-          MAX="${{ github.event.inputs.max || '30' }}"
+          MAX="${{ github.event.inputs.max || '20' }}"
           echo "Invoking x-unfollow (max=$MAX)…"
           HTTP=$(curl -sS -w '\n%{http_code}' -X POST \
             "https://api.browserbase.com/v1/functions/${{ secrets.BB_FUNCTION_ID }}/invoke" \
