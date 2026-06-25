@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS launchd agent: runs scripts/status.sh every 12 hours with a notification + log.
+     Install:
+       cp scripts/com.xratioagent.status.plist ~/Library/LaunchAgents/
+       launchctl unload ~/Library/LaunchAgents/com.xratioagent.status.plist 2>/dev/null
+       launchctl load -w ~/Library/LaunchAgents/com.xratioagent.status.plist
+     Stop:
+       launchctl unload ~/Library/LaunchAgents/com.xratioagent.status.plist
+     NOTE: paths are absolute — edit them if the repo moves. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.xratioagent.status</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/yawbt/Documents/GitHub/Browserbase/projects/x-ratio-agent/scripts/status.sh</string>
+    <string>--notify</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>43200</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/yawbt/Documents/GitHub/Browserbase/projects/x-ratio-agent/data/status-cron.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/yawbt/Documents/GitHub/Browserbase/projects/x-ratio-agent/data/status-cron.err</string>
+</dict>
+</plist>
