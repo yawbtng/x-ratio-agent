@@ -21,7 +21,9 @@ export const config = {
   // Goal: get following under this number (keep mutuals + your chosen non-followers).
   targetFollowing: Number(process.env.TARGET_FOLLOWING ?? 700),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY, // optional until M2
-  useProxy: (process.env.USE_PROXY ?? "true").toLowerCase() === "true",
+  // Proxies OFF by default — residential proxy bandwidth is metered ($12/GB) and blew past the plan
+  // allowance. Authenticated via Context, so datacenter IPs work fine. Set USE_PROXY=true to force on.
+  useProxy: (process.env.USE_PROXY ?? "false").toLowerCase() === "true",
 
   // Stagehand uses this for act/extract/observe (not needed by Spike 0).
   model: { modelName: "anthropic/claude-haiku-4-5", apiKey: process.env.ANTHROPIC_API_KEY },
