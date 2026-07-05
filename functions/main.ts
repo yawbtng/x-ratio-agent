@@ -298,13 +298,14 @@ defineFn(
   },
   {
     // The runtime creates ctx.session FROM this config. Loading our Context here is what makes the
-    // session arrive already logged into X. proxies:true matches the local setup. timeout is just
-    // under the 15-min Function execution ceiling.
+    // session arrive already logged into X. timeout is just under the 15-min execution ceiling.
+    // NOTE: proxies intentionally OFF — residential proxy bandwidth ($12/GB) blew past the 1GB plan
+    // allowance (640% over) loading full profile pages 60×/day. The account is authenticated via the
+    // Context (cookies), and X rate-limits per-account not per-IP, so the datacenter IP is fine here.
     sessionConfig: {
       browserSettings: {
         context: { id: CONTEXT_ID, persist: false },
       },
-      proxies: true,
       timeout: 870,
     },
     parametersSchema: paramsSchema,
