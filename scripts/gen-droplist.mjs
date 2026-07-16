@@ -6,12 +6,20 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const scored = JSON.parse(fs.readFileSync(path.join(root, "data", "scored.json"), "utf8"));
+const scoredPath = path.join(root, "data", "scored.json");
 
-const drops = scored.accounts
-  .filter((a) => a.recommendedAction === "DROP")
-  .map((a) => a.handle.toLowerCase());
-const uniq = [...new Set(drops)].sort();
+// Empty-safe: before you've scanned+scored, there's no scored.json yet. Still write a valid
+// (empty) droplist.ts so `functions/main.ts` compiles and `npx bb publish` doesn't break.
+let uniq = [];
+if (fs.existsSync(scoredPath)) {
+  const scored = JSON.parse(fs.readFileSync(scoredPath, "utf8"));
+  const drops = (scored.accounts ?? [])
+    .filter((a) => a.recommendedAction === "DROP")
+    .map((a) => a.handle.toLowerCase());
+  uniq = [...new Set(drops)].sort();
+} else {
+  console.log("no data/scored.json yet — writing an empty droplist.ts (run scan + score first)");
+}
 
 const out =
   "// AUTO-GENERATED from data/scored.json (DROP recommendations). Do not edit by hand.\n" +

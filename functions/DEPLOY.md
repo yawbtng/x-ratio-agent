@@ -1,7 +1,8 @@
 # Deploying the `x-unfollow` Browserbase Function
 
-**DEPLOYED + LIVE.** Function ID `8af7020e-94a7-480e-8df4-aed789742e89`, daily cron wired. This doc
-is the runbook for re-deploying after code/droplist changes, and the record of how it works.
+The runbook for publishing this Function to your Browserbase account and re-deploying after
+code/droplist changes, plus the record of how it works. (First-time setup? Run `pnpm setup` from the
+project root — it generates your target list and prints the two commands below.)
 
 ## What this is
 
@@ -25,8 +26,8 @@ GitHub Actions curl is the only external trigger.
 
 1. A Browserbase plan **with browser minutes + proxy allowance** (Free is ~60 min/mo — not enough;
    each gentle run is a few minutes, and the harvest/score steps are minute-heavy too).
-2. The persisted X-login Context still valid: `X_CONTEXT_ID=8c6f0abe-73d1-4541-b796-eff6c30adbcd`.
-   If login expired, re-run `pnpm auth` in the parent project to refresh the Context first.
+2. A valid persisted X-login Context. Its id lives in `functions/config.local.ts` (gitignored,
+   written by `pnpm auth` / `pnpm setup`). If login expired, re-run `pnpm auth` to refresh it.
 
 ## Steps
 
@@ -65,8 +66,8 @@ curl -X POST https://api.browserbase.com/v1/functions/FUNCTION_ID/invoke \
 #    unfollowed:0. One run/day (the cron) is the right cadence.
 ```
 
-**Currently deployed:** Function ID `8af7020e-94a7-480e-8df4-aed789742e89` (project `d9490f14-...`).
-Re-publish with `npx bb publish main.ts` after any code/droplist change (it makes a new version).
+`npx bb publish main.ts` prints your Function ID — save it (you'll set it as the `BB_FUNCTION_ID`
+GitHub secret below). Re-publish after any code/droplist change; each publish makes a new version.
 
 ## Wire the daily trigger (GitHub Actions)
 
@@ -96,8 +97,8 @@ All confirmed against the live runtime (2026-06-22 → 06-24):
    is mandatory (see the npm note above).
 3. **15-min execution cap** — profile mode at `max: 20` runs ~5 min (a visit-cap of `max*3+15`
    bounds it). Don't raise `max` past ~30.
-4. **Proxy bandwidth** — `proxies: true`; residential proxy is metered separately from browser
-   minutes. Watch both in the Browserbase dashboard.
+4. **Proxies are OFF** — X rate-limits per-account, not per-IP, so a proxy doesn't help and
+   residential bandwidth is metered ($12/GB). Only turn it on if X starts IP-blocking you.
 5. **Cadence** — X throttles the account under rapid back-to-back sessions. One run/day (the cron)
    is the right pace; don't fire many invocations manually in a short window.
 

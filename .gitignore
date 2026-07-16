@@ -1,12 +1,20 @@
 node_modules/
 dist/
 .env
-# NOTE: data/ IS committed (private repo only) so the GitHub Actions cron can resume
-# grind state between runs. It holds your follow graph + the LLM keep/drop judgments +
-# the Browserbase contextId (not credentials — the X login lives server-side in Browserbase).
 
-# status notifier runtime artifacts (local only)
-data/.status-cache.json
-data/status-log.txt
-data/status-cron.out
-data/status-cron.err
+# ─── Personal data — NEVER commit (this is a public repo) ───────────────────────
+# Your harvested follow graph, LLM keep/drop judgments, and the generated target list
+# are personal. They stay on your disk (so your local grind keeps working) but are not
+# tracked. Templates ship as *.example.* so others can see the shape.
+# ignore data/ CONTENTS (not the dir itself) so we can keep .gitkeep tracked
+data/*
+functions/droplist.ts
+functions/config.local.ts
+interest-profile.md
+
+# keep the empty data dir in the tree (example templates live at *.example.* and
+# are not matched by the ignores above, so they stay tracked automatically)
+!data/.gitkeep
+
+# agent working notes (local)
+tasks/

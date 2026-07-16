@@ -4,6 +4,12 @@ Gets an X (Twitter) following count down to a target by unfollowing accounts tha
 back and aren't relevant, while keeping the ones you care about. Built on
 [Browserbase](https://browserbase.com) + [Stagehand](https://github.com/browserbase/stagehand).
 
+## Demo
+
+▶ **[Watch the 90-second demo →](https://drive.google.com/file/d/1cAbH93gAGAA7FiFNix14DaU-jz6uTGWh/view)**
+
+An autonomous agent driving a real browser on Browserbase, scoring who to keep, and unfollowing on a schedule with zero server.
+
 ## How it works
 
 1. **Scan** — log into X once (persisted as a Browserbase Context) and harvest your full
@@ -30,15 +36,44 @@ under 750 is a multi-week grind by design, not a one-shot.
 |---|---|
 | `src/` | the scan → score → report pipeline + local unfollow CLI (`pnpm cli`) |
 | `functions/` | the deployed Browserbase Function + [`DEPLOY.md`](functions/DEPLOY.md) |
-| `scripts/gen-droplist.mjs` | regenerate the function's baked-in target list from `scored.json` |
-| `data/` | harvested graph, scores, droplist source (personal — private repo only) |
+| `scripts/setup.mjs` | one-command onboarding (`pnpm setup`) |
+| `scripts/gen-droplist.mjs` | (re)generate the Function's target list from `data/scored.json` |
+| `data/`, `functions/droplist.ts`, `interest-profile.md`, `functions/config.local.ts` | **your personal data — gitignored.** Templates ship as `*.example.*` |
 | `.github/workflows/` | the daily trigger |
 
-## Run it
+## Use it yourself
 
-Local pipeline: `pnpm install`, copy `.env.example` → `.env`, then `pnpm auth` → `pnpm scan` →
-`pnpm score` → `pnpm report`. Deploy the daily grind: see [`functions/DEPLOY.md`](functions/DEPLOY.md).
+This is wired to be reusable. Nothing here is tied to one account — your follow graph, interest
+profile, target list, and Browserbase Context all get generated for *you* and stay on your disk
+(gitignored). To run it on your own X:
 
-> Safety: login is by hand in a Browserbase Live View (no scripted passwords). Sessions use a
-> residential proxy. Unfollowing is gentle + capped, verifies each action, and aborts on any
-> login/challenge wall.
+**Prerequisites**
+- A [Browserbase](https://www.browserbase.com) account (a paid plan — a full grind needs long
+  sessions + concurrency the free tier caps).
+- An [Anthropic API key](https://console.anthropic.com/) (for relevance scoring — a few cents).
+- Node 18+ and `pnpm`.
+
+**One command**
+```bash
+pnpm install
+pnpm setup     # checks env → logs you into X (by hand) → harvests → scores → builds your target list
+```
+`pnpm setup` walks every step and prints the two deploy commands at the end. It's resumable — re-run
+it anytime; it won't redo work that's already done.
+
+**Then deploy the daily grind**
+```bash
+cd functions && npx bb publish main.ts        # builds + prints your Function ID
+gh secret set BROWSERBASE_API_KEY --body "<your key>"
+gh secret set BB_FUNCTION_ID      --body "<Function ID from publish>"
+```
+The [GitHub Actions workflow](.github/workflows/daily-unfollow.yml) then pokes your Function a few
+times a day. Full runbook: [`functions/DEPLOY.md`](functions/DEPLOY.md).
+
+Prefer to drive it by hand instead of the setup wizard? The underlying steps are
+`pnpm auth → pnpm scan → pnpm score → node scripts/gen-droplist.mjs`, then deploy.
+
+> **Safety.** Login is by hand in a Browserbase Live View (no scripted passwords). Unfollowing is
+> gentle + capped per run, verifies each action actually stuck, and aborts on any login/challenge
+> wall. Proxies are off by default (X rate-limits per-account, not per-IP). Your personal data and
+> Browserbase Context never enter git.

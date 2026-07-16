@@ -25,14 +25,21 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import { defineFn } from "@browserbasehq/sdk-functions";
 import { DROP } from "./droplist.js";
+import { CONTEXT_ID as CFG_CONTEXT_ID, X_HANDLE as CFG_X_HANDLE } from "./config.local.js";
 
 const X_BASE = "https://x.com";
 
-// The /following list owner + the Browserbase Context holding the persisted X login.
-// Neither is a secret (a context id is just an identifier; the handle is public), so they're safe
-// to commit. Override via env if you ever rotate them.
-const X_HANDLE = (process.env.X_HANDLE ?? "").replace(/^@/, "") || "REPLACE_WITH_X_HANDLE";
-const CONTEXT_ID = process.env.X_CONTEXT_ID ?? "8c6f0abe-73d1-4541-b796-eff6c30adbcd";
+// The /following list owner + the Browserbase Context holding the persisted X login come from
+// config.local.ts (gitignored, personal). Env vars still win if set, so you can override without
+// editing files. Fail fast if neither is configured — never fall back to someone else's account.
+const X_HANDLE = (process.env.X_HANDLE ?? CFG_X_HANDLE).replace(/^@/, "");
+const CONTEXT_ID = process.env.X_CONTEXT_ID ?? CFG_CONTEXT_ID;
+if (!CONTEXT_ID || CONTEXT_ID.startsWith("REPLACE")) {
+  throw new Error(
+    "No Browserbase Context configured. Run `pnpm auth` to create one, then set CONTEXT_ID in " +
+      "functions/config.local.ts (copy config.local.example.ts). See README → Use it yourself.",
+  );
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const jitter = (min: number, max: number) => Math.round(min + Math.random() * (max - min));

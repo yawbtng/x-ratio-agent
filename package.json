@@ -3,8 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Browser-automation agent (Browserbase + Stagehand) that audits your X following and recommends who to unfollow. See ../../tasks/x-ratio-agent-plan.md",
+  "description": "Autonomous agent (Browserbase + Stagehand) that gets your X following down to a target by unfollowing non-mutuals you don't care about, on a schedule.",
   "scripts": {
+    "setup": "node scripts/setup.mjs",
     "auth": "tsx src/cli.ts login",
     "spike0": "tsx src/cli.ts spike0",
     "scan": "tsx src/cli.ts scan",
