@@ -6,9 +6,9 @@ back and aren't relevant, while keeping the ones you care about. Built on
 
 ## Demo
 
-▶ **[Watch the 90-second demo →](https://drive.google.com/file/d/1cAbH93gAGAA7FiFNix14DaU-jz6uTGWh/view)**
+<video src="https://github.com/yawbtng/x-ratio-agent/raw/master/assets/demo.mp4" controls muted width="100%"></video>
 
-An autonomous agent driving a real browser on Browserbase, scoring who to keep, and unfollowing on a schedule with zero server.
+An autonomous agent driving a real browser on Browserbase, scoring who to keep, and unfollowing on a schedule with zero server. ([watch on Google Drive](https://drive.google.com/file/d/1cAbH93gAGAA7FiFNix14DaU-jz6uTGWh/view) if the player doesn't load.)
 
 ## How it works
 
