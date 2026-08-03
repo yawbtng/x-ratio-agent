@@ -1,15 +1,16 @@
 name: daily-unfollow
 # Daily trigger for the deployed Browserbase x-unfollow function.
 
-# The browser work runs on Browserbase (the deployed `x-unfollow` Function). This workflow is just
-# the daily trigger — it pokes the function's invoke URL. No Node, no checkout, no session here.
+# The browser work runs on Browserbase (the deployed `x-unfollow` Function). This workflow invokes
+# the function, then POLLS the invocation to completion so the real result (how many were actually
+# unfollowed) shows up in the run — not just "HTTP 202 accepted". No Node, no checkout here.
 #
 # Requires repo secrets:
 #   BROWSERBASE_API_KEY  — your Browserbase key
 #   BB_FUNCTION_ID       — the id printed by `bb publish` (see functions/DEPLOY.md)
 on:
   schedule:
-    # Three times a day, every 8h → ~60 unfollows/day at max=20 each. Smaller, more frequent batches
+    # Three times a day, every 8h → ~90 unfollows/day at max=30 each. Smaller, more frequent batches
     # are gentler on X's account-level throttle than fewer big ones (burst size is what trips it).
     - cron: "0 1 * * *"  # 01:00 UTC ≈ 6pm PT
     - cron: "0 9 * * *"  # 09:00 UTC ≈ 2am PT
@@ -24,18 +25,82 @@ jobs:
   trigger:
     runs-on: ubuntu-latest
     steps:
-      - name: Invoke Browserbase unfollow function
+      - name: Invoke and await x-unfollow
+        env:
+          BB_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BB_FUNCTION_ID: ${{ secrets.BB_FUNCTION_ID }}
+          MAX: ${{ github.event.inputs.max || '30' }}
         run: |
-          MAX="${{ github.event.inputs.max || '30' }}"
+          set -euo pipefail
+
           echo "Invoking x-unfollow (max=$MAX)…"
-          HTTP=$(curl -sS -w '\n%{http_code}' -X POST \
-            "https://api.browserbase.com/v1/functions/${{ secrets.BB_FUNCTION_ID }}/invoke" \
-            -H "x-bb-api-key: ${{ secrets.BROWSERBASE_API_KEY }}" \
+          RESP=$(curl -sS -w '\n%{http_code}' -X POST \
+            "https://api.browserbase.com/v1/functions/$BB_FUNCTION_ID/invoke" \
+            -H "x-bb-api-key: $BB_API_KEY" \
             -H "Content-Type: application/json" \
             -d "{\"params\":{\"max\":$MAX}}")
-          BODY=$(echo "$HTTP" | sed '$d')
-          CODE=$(echo "$HTTP" | tail -1)
-          echo "HTTP $CODE"
+          BODY=$(echo "$RESP" | sed '$d')
+          CODE=$(echo "$RESP" | tail -1)
+          echo "invoke HTTP $CODE"
           echo "$BODY"
-          # 2xx = accepted. Anything else (e.g. 402 plan limit) fails the run so you get notified.
-          [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]
+          # 2xx = accepted. Anything else (e.g. 402 plan limit, 401 bad key) fails the run.
+          if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 300 ]; then
+            echo "::error::Invoke rejected (HTTP $CODE) — likely a plan limit (402) or bad API key."
+            exit 1
+          fi
+
+          IID=$(echo "$BODY" | jq -r '.id // empty')
+          if [ -z "$IID" ]; then
+            echo "::error::No invocation id in invoke response; cannot poll for result."
+            exit 1
+          fi
+
+          echo "Polling invocation $IID (Function cap ~870s; polling up to ~16m)…"
+          STATUS="PENDING"
+          RESULT="{}"
+          for i in $(seq 1 96); do
+            sleep 10
+            INV=$(curl -sS -H "x-bb-api-key: $BB_API_KEY" \
+              "https://api.browserbase.com/v1/functions/invocations/$IID")
+            STATUS=$(echo "$INV" | jq -r '.status // "UNKNOWN"')
+            echo "  [$((i * 10))s] status=$STATUS"
+            if [ "$STATUS" = "COMPLETED" ] || [ "$STATUS" = "FAILED" ]; then
+              RESULT=$(echo "$INV" | jq -c '.results // {}')
+              break
+            fi
+          done
+
+          UNF=$(echo "$RESULT" | jq -r '.unfollowed // "?"')
+          VIS=$(echo "$RESULT" | jq -r '.visited // "?"')
+          OK=$(echo "$RESULT" | jq -r '.ok // false')
+          ERR=$(echo "$RESULT" | jq -r '.error // ""')
+
+          # Surface the real numbers on the run's Summary page (visible at a glance).
+          {
+            echo "### x-unfollow — \`$STATUS\`"
+            echo ""
+            echo "| unfollowed | visited | max |"
+            echo "|---|---|---|"
+            echo "| **$UNF** | $VIS | $MAX |"
+            [ -n "$ERR" ] && echo "" && echo "error: \`$ERR\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "results: $RESULT"
+
+          # Hard-fail on a real failure so you get a notification (e.g. not_logged_in = Context expired).
+          if [ "$STATUS" = "FAILED" ] || [ "$OK" != "true" ]; then
+            echo "::error::Invocation $STATUS (ok=$OK, error='$ERR'). If 'not_logged_in', re-run \`pnpm auth\` to refresh the Context."
+            exit 1
+          fi
+
+          # Didn't finish inside the poll window — don't fail (it may still complete), just flag it.
+          if [ "$STATUS" != "COMPLETED" ]; then
+            echo "::warning::Invocation still $STATUS after ~16m; check the Browserbase dashboard for $IID."
+            exit 0
+          fi
+
+          # Drained-list / throttle signal: visited profiles but unfollowed nobody.
+          if [ "$UNF" = "0" ] && [ "$VIS" != "0" ] && [ "$VIS" != "?" ]; then
+            echo "::warning::0 unfollowed across $VIS visited — the droplist may be exhausted (or the account is throttled). If this persists across runs, re-harvest → re-score → redeploy (functions/DEPLOY.md)."
+          fi
+
+          echo "Done: unfollowed $UNF of $VIS visited."
