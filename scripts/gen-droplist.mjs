@@ -13,10 +13,17 @@ const scoredPath = path.join(root, "data", "scored.json");
 let uniq = [];
 if (fs.existsSync(scoredPath)) {
   const scored = JSON.parse(fs.readFileSync(scoredPath, "utf8"));
-  const drops = (scored.accounts ?? [])
-    .filter((a) => a.recommendedAction === "DROP")
-    .map((a) => a.handle.toLowerCase());
-  uniq = [...new Set(drops)].sort();
+  // ONLY_SCORED=1 keeps only DROPs that carry a real LLM relevance score. Use it when a scoring
+  // run degraded (e.g. an expired ANTHROPIC_API_KEY 401s and score.ts falls back to notability
+  // alone) — otherwise accounts get unfollowed on no information at all, which is exactly what the
+  // KEEP-what-you-care-about goal is trying to avoid. Drop the flag once scoring is healthy again.
+  const onlyScored = process.env.ONLY_SCORED === "1";
+  const all = (scored.accounts ?? []).filter((a) => a.recommendedAction === "DROP");
+  const kept = onlyScored ? all.filter((a) => a.relevance !== null) : all;
+  if (onlyScored) {
+    console.log(`ONLY_SCORED=1 → ${kept.length} of ${all.length} DROPs have a relevance score (${all.length - kept.length} unscored held back)`);
+  }
+  uniq = [...new Set(kept.map((a) => a.handle.toLowerCase()))].sort();
 } else {
   console.log("no data/scored.json yet — writing an empty droplist.ts (run scan + score first)");
 }
