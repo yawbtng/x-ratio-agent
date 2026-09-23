@@ -8,13 +8,25 @@ name: daily-unfollow
 # Requires repo secrets:
 #   BROWSERBASE_API_KEY  — your Browserbase key
 #   BB_FUNCTION_ID       — the id printed by `bb publish` (see functions/DEPLOY.md)
+# ── SCHEDULE DISABLED 2026-09-22 ──────────────────────────────────────────────────────────────
+# Project closed out at 617 following (target was under 500). Manual runs still work via
+# workflow_dispatch; the x-unfollow Function stays published and costs nothing while un-invoked.
+#
+# To revive: uncomment the three crons below. NOTE — Actions reads `schedule:` from the DEFAULT
+# BRANCH only, so the change must land on master to take effect (that is also why disabling it
+# here required a merge, not just a branch commit).
+#
+# Before reviving, re-verify the DOM selectors in functions/main.ts against live X first. They have
+# now drifted twice: "Following" → "Unfollow @handle" on the profile button (Aug), and the
+# confirmation sheet → a role="menu" dropdown (Sep). Both failed SILENTLY and green.
+#
+#   schedule:
+#     # Three times a day, every 8h → ~90 unfollows/day at max=30 each. Smaller, more frequent
+#     # batches are gentler on X's account-level throttle (burst size is what trips it).
+#     - cron: "0 1 * * *"  # 01:00 UTC ≈ 6pm PT
+#     - cron: "0 9 * * *"  # 09:00 UTC ≈ 2am PT
+#     - cron: "0 17 * * *" # 17:00 UTC ≈ 10am PT
 on:
-  schedule:
-    # Three times a day, every 8h → ~90 unfollows/day at max=30 each. Smaller, more frequent batches
-    # are gentler on X's account-level throttle than fewer big ones (burst size is what trips it).
-    - cron: "0 1 * * *"  # 01:00 UTC ≈ 6pm PT
-    - cron: "0 9 * * *"  # 09:00 UTC ≈ 2am PT
-    - cron: "0 17 * * *" # 17:00 UTC ≈ 10am PT
   workflow_dispatch:
     inputs:
       max:

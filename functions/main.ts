@@ -96,7 +96,25 @@ const PROFILE_CLICK_EXPR = `(() => {
   return false;
 })()`;
 
-const CONFIRM_EXPR = `(() => { var b = document.querySelector('[data-testid="confirmationSheetConfirm"]'); if (b) { b.click(); return true; } return false; })()`;
+// Commit the unfollow. TWO shapes, because X changed this too (2026-09):
+//   legacy — a confirmation SHEET with data-testid="confirmationSheetConfirm"
+//   current — a role="menu" dropdown holding one "Unfollow @handle" item that carries NO
+//             data-testid and NO aria-label, so it can only be matched on its text.
+// When this returned false the click opened the menu and nothing committed, so the account stayed
+// followed. `before` had already read 'following', which RESET the consecutive-skip breaker — so
+// runs walked the full visitCap and still reported unfollowed:0. Match both shapes.
+const CONFIRM_EXPR = `(() => {
+  var b = document.querySelector('[data-testid="confirmationSheetConfirm"]');
+  if (b) { b.click(); return true; }
+  var panels = document.querySelectorAll('[role="menu"], [role="dialog"]');
+  for (var i = 0; i < panels.length; i++) {
+    var items = panels[i].querySelectorAll('[role="menuitem"], [role="button"], button');
+    for (var j = 0; j < items.length; j++) {
+      if (/^Unfollow\\b/i.test((items[j].textContent || '').trim())) { items[j].click(); return true; }
+    }
+  }
+  return false;
+})()`;
 
 // ── List-page primitives (mode: "list", fallback) ──────────────────────────────────────────────
 // Extract a UserCell's @handle from its profile LINK href (e.g. <a href="/jack">), NOT from
