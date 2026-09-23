@@ -53,31 +53,68 @@ function shuffled<T>(arr: readonly T[]): T[] {
 }
 
 // ── Profile-page primitives (mode: "profile") ──────────────────────────────────────────────────
-// Follow state from a PROFILE's primary button via its (stable) aria-label.
+// Follow state from a PROFILE's primary button via its aria-label.
 //   'following' = we follow them · 'notfollowing' = we don't · 'unknown' = button not rendered yet.
+//
+// LABEL DRIFT (2026-08): X relabelled the button on a followed account from "Following" to
+// "Unfollow @handle". The old /^Following/ test silently stopped matching — and "Unfollow @x"
+// doesn't match /^Follow\\b/ either, so EVERY followed account read as 'unknown' → skipped →
+// the run's consecutive-skip breaker tripped at 15 and reported unfollowed:0. Both spellings are
+// accepted now so an A/B'd session works either way.
+//
+// Do NOT key off data-testid here: X puts data-testid="<userId>-unfollow" on the SUBSCRIBE
+// button (aria-label "Subscribe to @handle"), so that hook points at the wrong control.
+const FOLLOW_STATE_JS = `function btnState(al){
+  if (!al) return null;
+  if (/^Unfollow\\b/i.test(al)) return 'following';   // current: "Unfollow @handle"
+  if (/^Following\\b/i.test(al)) return 'following';  // legacy: "Following"
+  if (/^Follow\\b/i.test(al)) return 'notfollowing';  // "Follow @handle" ("Followers" won't match \\b)
+  return null;
+}`;
+
 const PROFILE_STATE_EXPR = `(() => {
+  ${FOLLOW_STATE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
   var btns = scope.querySelectorAll('[role="button"][aria-label], button[aria-label]');
   var sawFollow = false;
   for (var i = 0; i < btns.length; i++) {
-    var al = btns[i].getAttribute('aria-label') || '';
-    if (/^Following/i.test(al)) return 'following';
-    if (/^Follow\\b/i.test(al)) sawFollow = true;
+    var st = btnState(btns[i].getAttribute('aria-label'));
+    if (st === 'following') return 'following';
+    if (st === 'notfollowing') sawFollow = true;
   }
   return sawFollow ? 'notfollowing' : 'unknown';
 })()`;
 
 // Click the profile's "Following" button (opens the unfollow confirm). Returns true if clicked.
 const PROFILE_CLICK_EXPR = `(() => {
+  ${FOLLOW_STATE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
   var btns = scope.querySelectorAll('[role="button"][aria-label], button[aria-label]');
   for (var i = 0; i < btns.length; i++) {
-    if (/^Following/i.test(btns[i].getAttribute('aria-label') || '')) { btns[i].click(); return true; }
+    if (btnState(btns[i].getAttribute('aria-label')) === 'following') { btns[i].click(); return true; }
   }
   return false;
 })()`;
 
-const CONFIRM_EXPR = `(() => { var b = document.querySelector('[data-testid="confirmationSheetConfirm"]'); if (b) { b.click(); return true; } return false; })()`;
+// Commit the unfollow. TWO shapes, because X changed this too (2026-09):
+//   legacy — a confirmation SHEET with data-testid="confirmationSheetConfirm"
+//   current — a role="menu" dropdown holding one "Unfollow @handle" item that carries NO
+//             data-testid and NO aria-label, so it can only be matched on its text.
+// When this returned false the click opened the menu and nothing committed, so the account stayed
+// followed. `before` had already read 'following', which RESET the consecutive-skip breaker — so
+// runs walked the full visitCap and still reported unfollowed:0. Match both shapes.
+const CONFIRM_EXPR = `(() => {
+  var b = document.querySelector('[data-testid="confirmationSheetConfirm"]');
+  if (b) { b.click(); return true; }
+  var panels = document.querySelectorAll('[role="menu"], [role="dialog"]');
+  for (var i = 0; i < panels.length; i++) {
+    var items = panels[i].querySelectorAll('[role="menuitem"], [role="button"], button');
+    for (var j = 0; j < items.length; j++) {
+      if (/^Unfollow\\b/i.test((items[j].textContent || '').trim())) { items[j].click(); return true; }
+    }
+  }
+  return false;
+})()`;
 
 // ── List-page primitives (mode: "list", fallback) ──────────────────────────────────────────────
 // Extract a UserCell's @handle from its profile LINK href (e.g. <a href="/jack">), NOT from
@@ -95,6 +132,7 @@ const CELL_HANDLE_JS = `function cellHandle(cell){
 
 const FIND_CLICK_EXPR = `(() => {
   ${CELL_HANDLE_JS}
+  ${FOLLOW_STATE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
   var cells = scope.querySelectorAll('[data-testid="UserCell"]');
   for (var i = 0; i < cells.length; i++) {
@@ -103,7 +141,7 @@ const FIND_CLICK_EXPR = `(() => {
     if (!window.__drop.has(h) || window.__done.has(h)) continue;
     var btns = cells[i].querySelectorAll('[role="button"][aria-label], button[aria-label]');
     for (var j = 0; j < btns.length; j++) {
-      if (/^Following/i.test(btns[j].getAttribute('aria-label') || '')) {
+      if (btnState(btns[j].getAttribute('aria-label')) === 'following') {
         btns[j].scrollIntoView({ block: 'center' });
         btns[j].click();
         return h;
@@ -115,13 +153,14 @@ const FIND_CLICK_EXPR = `(() => {
 
 const verifyExpr = (handle: string) => `(() => {
   ${CELL_HANDLE_JS}
+  ${FOLLOW_STATE_JS}
   var scope = document.querySelector('[data-testid="primaryColumn"]') || document.body;
   var cells = scope.querySelectorAll('[data-testid="UserCell"]');
   for (var i = 0; i < cells.length; i++) {
     if (cellHandle(cells[i]) !== ${JSON.stringify(handle)}) continue;
     var btns = cells[i].querySelectorAll('[role="button"][aria-label], button[aria-label]');
     for (var j = 0; j < btns.length; j++) {
-      if (/^Following/i.test(btns[j].getAttribute('aria-label') || '')) return 'following';
+      if (btnState(btns[j].getAttribute('aria-label')) === 'following') return 'following';
     }
     return 'notfollowing';
   }
