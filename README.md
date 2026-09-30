@@ -4,6 +4,8 @@ Gets an X (Twitter) following count down to a target by unfollowing accounts tha
 back and aren't relevant, while keeping the ones you care about. Built on
 [Browserbase](https://browserbase.com) + [Stagehand](https://github.com/browserbase/stagehand).
 
+> **Status (Sep 2026):** the daily cron is paused — X relabeled its follow buttons and the selector drift blinded the unfollow path. The scan/score/report pipeline and the Function still run on demand. Postmortem in [539bf29](https://github.com/yawbtng/x-ratio-agent/commit/539bf2948479b61929bb46596fb5fcdc11aeac97).
+
 ## Demo
 
 https://github.com/user-attachments/assets/dbc917f2-b729-4a09-85a5-a7d708a5d2fe
